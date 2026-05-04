@@ -398,7 +398,7 @@ class TestCheckCycle:
         monkeypatch.setenv("SLACK_CHANNEL_ID", "C123456")
         monkeypatch.setenv("GITHUB_REPO_URL", "https://github.com/test/repo")
         monkeypatch.setenv("GIST_ID", "fake-gist-id")
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp-fake")
+        monkeypatch.setenv("GHUB_TOKEN", "ghp-fake")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(allowlist_manager, "ALLOWLIST_FILE", tmp_path / "allowlist.json")
         allowlist_manager._save_unsafe(["acme corp"])

@@ -31,8 +31,7 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
           GITHUB_REPO_URL: https://github.com/vanshb03/Summer2026-Internships
-          # GH_GIST_TOKEN is a PAT with `gist` scope stored as a repo secret.
-          # It cannot be named GITHUB_TOKEN (reserved by Actions).
-          GITHUB_TOKEN: ${{ secrets.GH_GIST_TOKEN }}
+          # GHUB_TOKEN is a PAT with `gist` scope stored as a repo secret.
+          GHUB_TOKEN: ${{ secrets.GHUB_TOKEN }}
           GIST_ID: ${{ secrets.GIST_ID }}
         run: python mainbot.py

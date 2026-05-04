@@ -125,7 +125,7 @@ def main() -> None:
         "GITHUB_REPO_URL", "https://github.com/vanshb03/Summer2026-Internships"
     )
     gist_id: str = os.environ["GIST_ID"]
-    github_token: str = os.environ["GITHUB_TOKEN"]
+    github_token: str = os.environ["GHUB_TOKEN"]
 
     client = WebClient(token=slack_token)
 

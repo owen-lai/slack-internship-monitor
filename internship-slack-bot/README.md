@@ -65,9 +65,7 @@ Because each GitHub Actions runner is ephemeral, seen-post state is stored in a 
 1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)**.
 2. Click **Generate new token (classic)**.
 3. Give it a descriptive name (e.g. `internship-bot-gist`), set an expiry, and check only the **`gist`** scope.
-4. Copy the token (starts with `ghp-`). This is your `GITHUB_TOKEN`.
-
-> **Note**: GitHub Actions reserves the secret name `GITHUB_TOKEN` for its built-in runner token. Store your PAT as `GH_GIST_TOKEN` in repository secrets and the workflow maps it to the `GITHUB_TOKEN` env var automatically.
+4. Copy the token (starts with `ghp-`). This is your `GHUB_TOKEN`.
 
 ---
 
@@ -86,7 +84,7 @@ Edit `.env`:
 SLACK_BOT_TOKEN=xoxb-your-token-here
 SLACK_CHANNEL_ID=C0123456789
 GITHUB_REPO_URL=https://github.com/vanshb03/Summer2026-Internships
-GITHUB_TOKEN=ghp-your-personal-access-token-here
+GHUB_TOKEN=ghp-your-personal-access-token-here
 GIST_ID=your-gist-id-here
 ```
 
@@ -104,7 +102,7 @@ Go to **Settings → Secrets and variables → Actions → New repository secret
 |---|---|
 | `SLACK_BOT_TOKEN` | Your `xoxb-` bot token |
 | `SLACK_CHANNEL_ID` | The `C…` channel ID |
-| `GH_GIST_TOKEN` | Your PAT with `gist` scope (`ghp-…`) |
+| `GHUB_TOKEN` | Your PAT with `gist` scope (`ghp-…`) |
 | `GIST_ID` | The ID of your private Gist |
 
 On the first run the bot bootstraps: it records all current listings as seen without posting anything. Every subsequent run posts only new listings.
@@ -151,7 +149,7 @@ internship-slack-bot/
 |---|---|---|---|
 | `SLACK_BOT_TOKEN` | Yes | — | Bot OAuth token (`xoxb-…`) |
 | `SLACK_CHANNEL_ID` | Yes | — | Slack channel to post in |
-| `GITHUB_TOKEN` | Yes | — | PAT with `gist` scope for state persistence |
+| `GHUB_TOKEN` | Yes | — | PAT with `gist` scope for state persistence |
 | `GIST_ID` | Yes | — | ID of the private Gist storing `seen_ids.json` |
 | `GITHUB_REPO_URL` | No | `https://github.com/vanshb03/Summer2026-Internships` | Internship listings repo |
 
