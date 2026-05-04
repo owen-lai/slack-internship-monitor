@@ -7,6 +7,7 @@ internships_repo/
 # Bot state — can be committed if you want persistence across deploys,
 # but it's machine-local by default
 seen_ids.json
+allowlist.json
 
 # Python
 __pycache__/

@@ -18,6 +18,8 @@ from dotenv import load_dotenv
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
+import allowlist_manager
+import bot_listener
 import formatter
 import repo_manager
 import state_manager
@@ -104,6 +106,11 @@ def check_cycle(client: WebClient, repo_url: str | None = None, channel: str | N
     logger.info("%d new active listings to announce", len(new_listings))
 
     for listing in new_listings:
+        company = listing.get("company_name") or listing.get("company") or ""
+        if not allowlist_manager.is_allowed(company):
+            logger.debug("Skipping non-allowlisted company: %s", company)
+            seen_ids.add(str(listing["id"]))
+            continue
         post_listing(client, channel, listing)
         seen_ids.add(str(listing["id"]))
 
@@ -130,6 +137,13 @@ def main() -> None:
         logger.info("RUN_ONCE mode — performing a single check cycle.")
         check_cycle(client, repo_url=repo_url, channel=channel)
         return
+
+    # Start the Bolt Socket Mode listener for Slack commands (non-blocking daemon thread)
+    app_token: str | None = os.getenv("SLACK_APP_TOKEN")
+    if app_token:
+        bot_listener.start_listener(slack_token, app_token, channel)
+    else:
+        logger.warning("SLACK_APP_TOKEN not set — 'add <company>' command listener is disabled.")
 
     logger.info(
         "Starting internship monitor (interval=%ds, channel=%s)",

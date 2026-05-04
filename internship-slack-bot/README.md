@@ -34,8 +34,12 @@ Date Posted    Apr 25, 2024
 3. In the left sidebar, open **OAuth & Permissions**.
 4. Under **Bot Token Scopes**, click **Add an OAuth Scope** and add:
    - `chat:write`
-5. Scroll up and click **Install to Workspace**, then **Allow**.
-6. Copy the **Bot User OAuth Token** (starts with `xoxb-`). You'll need it in the next step.
+5. In the left sidebar, open **Event Subscriptions** and toggle it **On**.
+   - Under **Subscribe to bot events**, add: `message.channels`
+6. In the left sidebar, open **Socket Mode** and toggle it **On**.
+   - Click **Generate an app-level token**, give it any name, add the `connections:write` scope, and click **Generate**. Copy the token (starts with `xapp-`). This is your `SLACK_APP_TOKEN`.
+7. Back in **OAuth & Permissions**, scroll up and click **Install to Workspace**, then **Allow**.
+8. Copy the **Bot User OAuth Token** (starts with `xoxb-`). This is your `SLACK_BOT_TOKEN`.
 
 > **Invite the bot to your channel**: In Slack, open the channel you want the bot to post in and type `/invite @YourBotName`.
 
@@ -46,6 +50,7 @@ Date Posted    Apr 25, 2024
 | Value | Where to find it |
 |---|---|
 | **Bot token** (`xoxb-…`) | Slack app → OAuth & Permissions → Bot User OAuth Token |
+| **App-level token** (`xapp-…`) | Slack app → Socket Mode → app-level token you generated |
 | **Channel ID** | Open the channel in Slack → right-click → **View channel details** → copy the ID at the bottom (starts with `C`) |
 
 ---
@@ -64,6 +69,7 @@ Edit `.env` and fill in your values:
 ```dotenv
 SLACK_BOT_TOKEN=xoxb-your-token-here
 SLACK_CHANNEL_ID=C0123456789
+SLACK_APP_TOKEN=xapp-your-app-token-here
 GITHUB_REPO_URL=https://github.com/vanshb03/Summer2026-Internships
 CHECK_INTERVAL_SECONDS=60
 ```
@@ -117,17 +123,19 @@ The workflow uses `actions/cache` to persist `seen_ids.json` between runs so pos
 
 ```
 internship-slack-bot/
-├── mainbot.py          # Entrypoint — orchestrates the check cycle
-├── formatter.py        # Builds Slack Block Kit payloads
-├── repo_manager.py     # git clone / pull logic
-├── state_manager.py    # seen_ids.json read/write and diff logic
-├── test_mainbot.py     # pytest test suite
+├── mainbot.py             # Entrypoint — orchestrates the check cycle
+├── formatter.py           # Builds Slack Block Kit payloads
+├── repo_manager.py        # git clone / pull logic
+├── state_manager.py       # seen_ids.json read/write and diff logic
+├── allowlist_manager.py   # allowlist.json load/save/query (thread-safe)
+├── bot_listener.py        # Bolt Socket Mode listener for "add <company>"
+├── test_mainbot.py        # pytest test suite (42 tests)
 ├── requirements.txt
-├── .env.example        # Config template (copy to .env)
+├── .env.example           # Config template (copy to .env)
 ├── .gitignore
 └── .github/
     └── workflows/
-        └── run_bot.yml # GitHub Actions CI workflow
+        └── run_bot.yml    # GitHub Actions CI workflow
 ```
 
 ### Environment variables
@@ -136,9 +144,22 @@ internship-slack-bot/
 |---|---|---|---|
 | `SLACK_BOT_TOKEN` | Yes | — | Bot OAuth token (`xoxb-…`) |
 | `SLACK_CHANNEL_ID` | Yes | — | Slack channel to post in |
+| `SLACK_APP_TOKEN` | No* | — | App-level token (`xapp-…`) for Socket Mode / "add" command |
 | `GITHUB_REPO_URL` | No | `https://github.com/vanshb03/Summer2026-Internships` | Internship listings repo |
 | `CHECK_INTERVAL_SECONDS` | No | `60` | Seconds between checks (local loop mode) |
 | `RUN_ONCE` | No | `false` | Set `true` to run once and exit (GitHub Actions) |
+
+\* Required to enable the `add <company>` Slack command. Without it the bot still posts listings but ignores messages.
+
+### Company allowlist
+
+On first run the bot creates `allowlist.json` seeded with ~50 well-known tech companies. Only postings whose company name matches an entry (case-insensitive) are announced.
+
+**To add a company at runtime**, post in the monitored channel:
+```
+add Figma
+```
+The bot replies in-thread and immediately starts filtering for that company.
 
 ---
 

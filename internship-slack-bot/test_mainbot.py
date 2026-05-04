@@ -270,13 +270,84 @@ class TestStatePersistence:
 # mainbot integration tests (Slack client mocked)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# allowlist_manager tests
+# ---------------------------------------------------------------------------
+
+class TestAllowlistManager:
+    @pytest.fixture(autouse=True)
+    def _tmp(self, tmp_path, monkeypatch):
+        import allowlist_manager
+        monkeypatch.setattr(allowlist_manager, "ALLOWLIST_FILE", tmp_path / "allowlist.json")
+
+    def test_is_allowed_case_insensitive(self):
+        import allowlist_manager
+        # Seed with a known entry
+        allowlist_manager._save_unsafe(["google"])
+        assert allowlist_manager.is_allowed("Google") is True
+        assert allowlist_manager.is_allowed("GOOGLE") is True
+        assert allowlist_manager.is_allowed("  google  ") is True
+
+    def test_is_allowed_returns_false_for_unknown(self):
+        import allowlist_manager
+        allowlist_manager._save_unsafe(["google"])
+        assert allowlist_manager.is_allowed("Unknown Corp") is False
+
+    def test_add_company_returns_true_for_new(self):
+        import allowlist_manager
+        allowlist_manager._save_unsafe([])
+        result = allowlist_manager.add_company("Stripe")
+        assert result is True
+
+    def test_add_company_returns_false_for_duplicate(self):
+        import allowlist_manager
+        allowlist_manager._save_unsafe(["stripe"])
+        result = allowlist_manager.add_company("Stripe")
+        assert result is False
+
+    def test_add_company_persists(self):
+        import allowlist_manager
+        allowlist_manager._save_unsafe([])
+        allowlist_manager.add_company("Figma")
+        assert allowlist_manager.is_allowed("figma") is True
+
+    def test_add_company_case_insensitive_dedup(self):
+        import allowlist_manager
+        allowlist_manager._save_unsafe(["figma"])
+        # Adding with different casing should be treated as duplicate
+        result = allowlist_manager.add_company("FIGMA")
+        assert result is False
+
+    def test_seeds_defaults_on_first_run(self, tmp_path):
+        import allowlist_manager
+        # File doesn't exist yet — load() should seed it
+        entries = allowlist_manager.load()
+        assert "google" in entries
+        assert "anthropic" in entries
+        assert allowlist_manager.ALLOWLIST_FILE.exists()
+
+    def test_load_corrupt_file_returns_defaults(self):
+        import allowlist_manager
+        allowlist_manager.ALLOWLIST_FILE.write_text("{bad json", encoding="utf-8")
+        entries = allowlist_manager.load()
+        assert "google" in entries
+
+
+# ---------------------------------------------------------------------------
+# mainbot integration tests (Slack client mocked)
+# ---------------------------------------------------------------------------
+
 class TestCheckCycle:
     @pytest.fixture(autouse=True)
     def _env(self, monkeypatch, tmp_path):
+        import allowlist_manager
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
         monkeypatch.setenv("SLACK_CHANNEL_ID", "C123456")
         monkeypatch.setenv("GITHUB_REPO_URL", "https://github.com/test/repo")
         monkeypatch.chdir(tmp_path)
+        # Seed an allowlist that includes the test company so existing cycle tests pass
+        monkeypatch.setattr(allowlist_manager, "ALLOWLIST_FILE", tmp_path / "allowlist.json")
+        allowlist_manager._save_unsafe(["acme corp"])
 
     def _make_client_mock(self):
         client = MagicMock()
@@ -353,3 +424,31 @@ class TestCheckCycle:
 
         seen = state_manager.load_seen_ids()
         assert "abc123" in seen
+
+    def test_non_allowlisted_company_not_posted(self, tmp_path):
+        import allowlist_manager, mainbot
+        allowlist_manager._save_unsafe(["google"])  # only Google allowed
+        client = self._make_client_mock()
+        unlisted_listing = {**SAMPLE_LISTING_ACTIVE, "id": "xyz", "company_name": "Acme Corp"}
+
+        with (
+            patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
+            patch("mainbot.load_listings", return_value=[unlisted_listing]),
+        ):
+            mainbot.check_cycle(client)
+
+        client.chat_postMessage.assert_not_called()
+
+    def test_allowlisted_company_is_posted(self, tmp_path):
+        import allowlist_manager, mainbot
+        allowlist_manager._save_unsafe(["google"])
+        client = self._make_client_mock()
+        google_listing = {**SAMPLE_LISTING_ACTIVE, "id": "goog1", "company_name": "Google"}
+
+        with (
+            patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
+            patch("mainbot.load_listings", return_value=[google_listing]),
+        ):
+            mainbot.check_cycle(client)
+
+        client.chat_postMessage.assert_called_once()
