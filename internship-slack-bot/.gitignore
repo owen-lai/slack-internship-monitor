@@ -1,0 +1,27 @@
+# Secrets — never commit
+.env
+
+# Cloned internship repo (re-cloned at runtime)
+internships_repo/
+
+# Bot state — can be committed if you want persistence across deploys,
+# but it's machine-local by default
+seen_ids.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
