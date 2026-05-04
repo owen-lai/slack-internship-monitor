@@ -1,17 +1,15 @@
 """
 mainbot.py — Entrypoint for the internship Slack bot.
 
-Behaviour
----------
-* Default: loops forever on CHECK_INTERVAL_SECONDS (default 60).
-* RUN_ONCE=true: runs a single check cycle then exits (used by GitHub Actions).
+Always performs a single check cycle and exits. Designed to be called
+by GitHub Actions on a cron schedule. Seen state is persisted between
+ephemeral runners via a private GitHub Gist.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
-import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -19,14 +17,10 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 import allowlist_manager
-import bot_listener
 import formatter
 import repo_manager
 import state_manager
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -37,17 +31,12 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
-# ---------------------------------------------------------------------------
-# Core logic
-# ---------------------------------------------------------------------------
-
 def load_listings(repo_path: Path) -> list[dict]:
     """Read and parse the listings JSON file from the cloned repo."""
     listings_path = repo_manager.find_listings_file(repo_path)
     text = listings_path.read_text(encoding="utf-8")
     data = json.loads(text)
     if isinstance(data, dict):
-        # Some repos wrap the array in a top-level object
         for key in ("postings", "listings", "jobs", "data"):
             if key in data and isinstance(data[key], list):
                 logger.debug("Unwrapping top-level key '%s'", key)
@@ -80,47 +69,54 @@ def post_listing(client: WebClient, channel: str, listing: dict) -> None:
         )
 
 
-def check_cycle(client: WebClient, repo_url: str | None = None, channel: str | None = None) -> None:
-    """One full check-and-notify cycle."""
-    if repo_url is None:
-        repo_url = os.getenv("GITHUB_REPO_URL", "https://github.com/vanshb03/Summer2026-Internships")
-    if channel is None:
-        channel = os.environ["SLACK_CHANNEL_ID"]
+def check_cycle(
+    client: WebClient,
+    seen_ids: set[str],
+    repo_url: str,
+    channel: str,
+    post_enabled: bool = True,
+) -> set[str]:
+    """
+    Fetch the latest listings, diff against seen_ids, and post new ones.
 
+    post_enabled=False skips Slack messages (bootstrap mode: record state
+    without flooding the channel on first run or after a Gist failure).
+
+    Returns the updated seen_ids set.
+    """
     try:
         repo_path = repo_manager.ensure_repo(repo_url)
     except RuntimeError as exc:
         logger.error("Git operation failed: %s", exc)
-        return
+        return seen_ids
 
     try:
         listings = load_listings(repo_path)
     except (json.JSONDecodeError, ValueError, FileNotFoundError, OSError) as exc:
         logger.error("Failed to load listings: %s", exc)
-        return
+        return seen_ids
 
     logger.info("Loaded %d total listings", len(listings))
 
-    seen_ids = state_manager.load_seen_ids()
     new_listings = state_manager.diff_listings(listings, seen_ids)
-    logger.info("%d new active listings to announce", len(new_listings))
+    logger.info(
+        "%d new active listings found%s",
+        len(new_listings),
+        " (bootstrap: not posting)" if not post_enabled else "",
+    )
 
     for listing in new_listings:
+        seen_ids.add(str(listing["id"]))
+        if not post_enabled:
+            continue
         company = listing.get("company_name") or listing.get("company") or ""
         if not allowlist_manager.is_allowed(company):
             logger.debug("Skipping non-allowlisted company: %s", company)
-            seen_ids.add(str(listing["id"]))
             continue
         post_listing(client, channel, listing)
-        seen_ids.add(str(listing["id"]))
 
-    # Always persist seen IDs — diff_listings may have added inactive ones too
-    state_manager.save_seen_ids(seen_ids)
+    return seen_ids
 
-
-# ---------------------------------------------------------------------------
-# Entrypoint
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     slack_token: str = os.environ["SLACK_BOT_TOKEN"]
@@ -128,33 +124,24 @@ def main() -> None:
     repo_url: str = os.getenv(
         "GITHUB_REPO_URL", "https://github.com/vanshb03/Summer2026-Internships"
     )
-    check_interval: int = int(os.getenv("CHECK_INTERVAL_SECONDS", "60"))
-    run_once: bool = os.getenv("RUN_ONCE", "false").lower() in {"1", "true", "yes"}
+    gist_id: str = os.environ["GIST_ID"]
+    github_token: str = os.environ["GITHUB_TOKEN"]
 
     client = WebClient(token=slack_token)
 
-    if run_once:
-        logger.info("RUN_ONCE mode — performing a single check cycle.")
-        check_cycle(client, repo_url=repo_url, channel=channel)
-        return
+    seen_ids, is_bootstrap = state_manager.fetch_seen_ids(gist_id, github_token)
+    if is_bootstrap:
+        logger.info("Bootstrap mode — recording current state without posting.")
 
-    # Start the Bolt Socket Mode listener for Slack commands (non-blocking daemon thread)
-    app_token: str | None = os.getenv("SLACK_APP_TOKEN")
-    if app_token:
-        bot_listener.start_listener(slack_token, app_token, channel)
-    else:
-        logger.warning("SLACK_APP_TOKEN not set — 'add <company>' command listener is disabled.")
-
-    logger.info(
-        "Starting internship monitor (interval=%ds, channel=%s)",
-        check_interval,
-        channel,
+    updated_ids = check_cycle(
+        client,
+        seen_ids,
+        repo_url=repo_url,
+        channel=channel,
+        post_enabled=not is_bootstrap,
     )
-    while True:
-        logger.info("--- Check cycle starting ---")
-        check_cycle(client, repo_url=repo_url, channel=channel)
-        logger.info("--- Check cycle complete, sleeping %ds ---", check_interval)
-        time.sleep(check_interval)
+
+    state_manager.push_seen_ids(gist_id, github_token, updated_ids)
 
 
 if __name__ == "__main__":

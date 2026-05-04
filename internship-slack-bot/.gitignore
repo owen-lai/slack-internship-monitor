@@ -4,10 +4,8 @@
 # Cloned internship repo (re-cloned at runtime)
 internships_repo/
 
-# Bot state — can be committed if you want persistence across deploys,
-# but it's machine-local by default
+# Seen-ID state is persisted in a GitHub Gist, not locally
 seen_ids.json
-allowlist.json
 
 # Python
 __pycache__/

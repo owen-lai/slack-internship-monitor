@@ -1,13 +1,13 @@
 """
-allowlist_manager.py — Persist and query the company allowlist.
+allowlist_manager.py — Load and query the committed company allowlist.
 
-Thread-safe: the polling loop and Bolt listener share this module across threads.
+allowlist.json is committed to the repo and updated via PR; there is no
+runtime editing, so no locking is needed.
 """
 from __future__ import annotations
 
 import json
 import logging
-import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -25,14 +25,9 @@ DEFAULT_COMPANIES = [
     "MongoDB", "Cloudflare", "Datadog", "Confluent", "Airtable",
 ]
 
-_lock = threading.Lock()
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers (called with _lock already held)
-# ---------------------------------------------------------------------------
 
 def _load_unsafe() -> list[str]:
+    """Read the allowlist file and return lowercase entries. Seeds defaults if absent."""
     if not ALLOWLIST_FILE.exists():
         _seed_unsafe()
     try:
@@ -53,40 +48,20 @@ def _save_unsafe(entries: list[str]) -> None:
 
 
 def _seed_unsafe() -> None:
-    defaults = [c.lower() for c in DEFAULT_COMPANIES]
-    _save_unsafe(defaults)
-    logger.info("Seeded default allowlist with %d companies.", len(defaults))
+    """Write the default allowlist (original casing for readability)."""
+    ALLOWLIST_FILE.write_text(
+        json.dumps(DEFAULT_COMPANIES, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    logger.info("Seeded default allowlist with %d companies.", len(DEFAULT_COMPANIES))
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def load() -> list[str]:
     """Return the full allowlist as a sorted list of lowercase strings."""
-    with _lock:
-        return _load_unsafe()
+    return _load_unsafe()
 
 
 def is_allowed(company: str) -> bool:
     """Return True if company matches any allowlist entry (case-insensitive)."""
     key = company.strip().lower()
-    with _lock:
-        return key in set(_load_unsafe())
-
-
-def add_company(company: str) -> bool:
-    """
-    Add company to the allowlist (stored lowercase).
-
-    Returns True if the company was newly added, False if it was already present.
-    """
-    key = company.strip().lower()
-    with _lock:
-        entries = _load_unsafe()
-        if key in entries:
-            return False
-        entries.append(key)
-        _save_unsafe(entries)
-    logger.info("Added '%s' to allowlist.", company)
-    return True
+    return key in set(_load_unsafe())

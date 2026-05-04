@@ -1,41 +1,74 @@
 """
-state_manager.py — Persist and load the set of already-seen listing IDs.
+state_manager.py — GitHub Gist-backed seen-ID persistence and listing diff logic.
+
+Each GitHub Actions run is ephemeral, so seen state is stored in a private
+Gist and fetched/pushed at the start and end of every run.
 """
 from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
+
+import requests
 
 logger = logging.getLogger(__name__)
 
-STATE_FILE = Path("seen_ids.json")
+_GIST_API = "https://api.github.com/gists"
+_GIST_FILENAME = "seen_ids.json"
 
 
-def load_seen_ids() -> set[str]:
-    """Return the set of listing IDs that have already been announced."""
-    if not STATE_FILE.exists():
-        logger.info("No state file found at %s — starting fresh.", STATE_FILE)
-        return set()
+def _gist_headers(token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
+
+
+def fetch_seen_ids(gist_id: str, token: str) -> tuple[set[str], bool]:
+    """
+    Fetch seen IDs from a GitHub Gist.
+
+    Returns ``(ids, is_bootstrap)``.
+    ``is_bootstrap=True`` means the fetch failed or the file was empty/invalid;
+    the caller should mark all current listings as seen without posting any.
+    """
+    url = f"{_GIST_API}/{gist_id}"
     try:
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        resp = requests.get(url, headers=_gist_headers(token), timeout=15)
+        resp.raise_for_status()
+        file_obj = resp.json().get("files", {}).get(_GIST_FILENAME, {})
+        content = (file_obj.get("content") or "").strip()
+        if not content or content == "{}":
+            logger.info("Gist '%s' has no prior state — bootstrapping.", gist_id)
+            return set(), True
+        data = json.loads(content)
         if not isinstance(data, list):
-            raise ValueError("Expected a JSON array of ID strings.")
-        ids = set(str(x) for x in data)
-        logger.info("Loaded %d seen IDs from %s", len(ids), STATE_FILE)
-        return ids
-    except (json.JSONDecodeError, ValueError) as exc:
-        logger.error("Failed to parse %s (%s) — starting with empty state.", STATE_FILE, exc)
-        return set()
+            logger.warning("Gist content is not a JSON array — bootstrapping.")
+            return set(), True
+        ids = {str(x) for x in data}
+        logger.info("Fetched %d seen IDs from Gist.", len(ids))
+        return ids, False
+    except Exception as exc:
+        logger.error("Failed to fetch seen IDs from Gist: %s", exc)
+        return set(), True
 
 
-def save_seen_ids(seen_ids: set[str]) -> None:
-    """Persist the full set of seen IDs to disk."""
-    STATE_FILE.write_text(
-        json.dumps(sorted(seen_ids), indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    logger.debug("Saved %d seen IDs to %s", len(seen_ids), STATE_FILE)
+def push_seen_ids(gist_id: str, token: str, seen_ids: set[str]) -> None:
+    """Write the updated seen-ID set back to the Gist. Logs and swallows errors."""
+    url = f"{_GIST_API}/{gist_id}"
+    payload = {
+        "files": {
+            _GIST_FILENAME: {
+                "content": json.dumps(sorted(seen_ids), indent=2, ensure_ascii=False)
+            }
+        }
+    }
+    try:
+        resp = requests.patch(url, headers=_gist_headers(token), json=payload, timeout=15)
+        resp.raise_for_status()
+        logger.info("Pushed %d seen IDs to Gist.", len(seen_ids))
+    except Exception as exc:
+        logger.error("Failed to push seen IDs to Gist: %s", exc)
 
 
 def diff_listings(
@@ -46,6 +79,9 @@ def diff_listings(
     Return listings that are:
       - not in seen_ids (genuinely new), AND
       - active / visible (not closed or hidden).
+
+    Inactive and hidden listings are added to seen_ids in-place so they are
+    never re-evaluated on subsequent runs.
     """
     new_postings = []
     for listing in listings:
@@ -56,10 +92,9 @@ def diff_listings(
         if lid in seen_ids:
             continue
 
-        # Filter out closed / hidden roles
         if not listing.get("active", True):
             logger.debug("Skipping inactive listing id=%s", lid)
-            seen_ids.add(lid)  # mark so we don't process it again later
+            seen_ids.add(lid)
             continue
         if not listing.get("is_visible", True):
             logger.debug("Skipping hidden listing id=%s", lid)

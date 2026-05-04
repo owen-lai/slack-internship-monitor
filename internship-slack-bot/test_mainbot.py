@@ -6,12 +6,12 @@ Run with:  pytest test_mainbot.py -v
 import json
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, Mock
 
 import pytest
 
 # ---------------------------------------------------------------------------
-# Helpers / fixtures
+# Shared sample data
 # ---------------------------------------------------------------------------
 
 SAMPLE_LISTING_ACTIVE = {
@@ -217,58 +217,130 @@ class TestDiffListings:
 
 
 # ---------------------------------------------------------------------------
-# state_manager persistence tests
+# state_manager Gist I/O tests
 # ---------------------------------------------------------------------------
 
-class TestStatePersistence:
-    def test_round_trip(self, tmp_path, monkeypatch):
-        import state_manager
-        monkeypatch.setattr(state_manager, "STATE_FILE", tmp_path / "seen_ids.json")
+class TestGistState:
+    GIST_ID = "abc123gist"
+    TOKEN = "ghp-fake-token"
 
-        original = {"id1", "id2", "id3"}
-        state_manager.save_seen_ids(original)
-        loaded = state_manager.load_seen_ids()
-        assert loaded == original
+    def _make_gist_response(self, content: str) -> Mock:
+        resp = Mock()
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = {
+            "files": {
+                "seen_ids.json": {"content": content}
+            }
+        }
+        return resp
 
-    def test_load_missing_file_returns_empty_set(self, tmp_path, monkeypatch):
-        import state_manager
-        monkeypatch.setattr(
-            state_manager, "STATE_FILE", tmp_path / "nonexistent.json"
-        )
-        result = state_manager.load_seen_ids()
-        assert result == set()
+    def test_fetch_populates_seen_ids(self):
+        from state_manager import fetch_seen_ids
+        ids_json = json.dumps(["id1", "id2", "id3"])
+        mock_resp = self._make_gist_response(ids_json)
 
-    def test_load_corrupt_file_returns_empty_set(self, tmp_path, monkeypatch):
-        import state_manager
-        bad_file = tmp_path / "bad.json"
-        bad_file.write_text("{not valid json", encoding="utf-8")
-        monkeypatch.setattr(state_manager, "STATE_FILE", bad_file)
-        result = state_manager.load_seen_ids()
-        assert result == set()
+        with patch("state_manager.requests.get", return_value=mock_resp) as mock_get:
+            seen, is_bootstrap = fetch_seen_ids(self.GIST_ID, self.TOKEN)
 
-    def test_save_creates_valid_json_array(self, tmp_path, monkeypatch):
-        import state_manager
-        path = tmp_path / "seen_ids.json"
-        monkeypatch.setattr(state_manager, "STATE_FILE", path)
+        assert seen == {"id1", "id2", "id3"}
+        assert is_bootstrap is False
+        mock_get.assert_called_once()
 
-        state_manager.save_seen_ids({"a", "b", "c"})
-        data = json.loads(path.read_text())
-        assert isinstance(data, list)
-        assert set(data) == {"a", "b", "c"}
+    def test_fetch_sends_auth_header(self):
+        from state_manager import fetch_seen_ids
+        mock_resp = self._make_gist_response(json.dumps(["x"]))
 
-    def test_overwrite_preserves_new_set(self, tmp_path, monkeypatch):
-        import state_manager
-        monkeypatch.setattr(state_manager, "STATE_FILE", tmp_path / "seen_ids.json")
+        with patch("state_manager.requests.get", return_value=mock_resp) as mock_get:
+            fetch_seen_ids(self.GIST_ID, self.TOKEN)
 
-        state_manager.save_seen_ids({"old1", "old2"})
-        state_manager.save_seen_ids({"new1"})
-        loaded = state_manager.load_seen_ids()
-        assert loaded == {"new1"}
+        _, kwargs = mock_get.call_args
+        assert f"Bearer {self.TOKEN}" in kwargs["headers"]["Authorization"]
 
+    def test_fetch_returns_bootstrap_on_network_error(self):
+        from state_manager import fetch_seen_ids
+        with patch("state_manager.requests.get", side_effect=ConnectionError("timeout")):
+            seen, is_bootstrap = fetch_seen_ids(self.GIST_ID, self.TOKEN)
+        assert seen == set()
+        assert is_bootstrap is True
 
-# ---------------------------------------------------------------------------
-# mainbot integration tests (Slack client mocked)
-# ---------------------------------------------------------------------------
+    def test_fetch_returns_bootstrap_on_http_error(self):
+        import requests as req
+        from state_manager import fetch_seen_ids
+        mock_resp = Mock()
+        mock_resp.raise_for_status.side_effect = req.HTTPError("500")
+
+        with patch("state_manager.requests.get", return_value=mock_resp):
+            seen, is_bootstrap = fetch_seen_ids(self.GIST_ID, self.TOKEN)
+
+        assert is_bootstrap is True
+
+    def test_fetch_returns_bootstrap_on_empty_content(self):
+        from state_manager import fetch_seen_ids
+        mock_resp = self._make_gist_response("")
+
+        with patch("state_manager.requests.get", return_value=mock_resp):
+            seen, is_bootstrap = fetch_seen_ids(self.GIST_ID, self.TOKEN)
+
+        assert is_bootstrap is True
+
+    def test_fetch_returns_bootstrap_on_initial_empty_gist(self):
+        from state_manager import fetch_seen_ids
+        mock_resp = self._make_gist_response("{}")
+
+        with patch("state_manager.requests.get", return_value=mock_resp):
+            seen, is_bootstrap = fetch_seen_ids(self.GIST_ID, self.TOKEN)
+
+        assert is_bootstrap is True
+
+    def test_fetch_returns_bootstrap_on_bad_json(self):
+        from state_manager import fetch_seen_ids
+        mock_resp = self._make_gist_response("{not valid json")
+
+        with patch("state_manager.requests.get", return_value=mock_resp):
+            seen, is_bootstrap = fetch_seen_ids(self.GIST_ID, self.TOKEN)
+
+        assert is_bootstrap is True
+
+    def test_fetch_returns_bootstrap_when_content_is_object_not_array(self):
+        from state_manager import fetch_seen_ids
+        mock_resp = self._make_gist_response('{"id1": true}')
+
+        with patch("state_manager.requests.get", return_value=mock_resp):
+            seen, is_bootstrap = fetch_seen_ids(self.GIST_ID, self.TOKEN)
+
+        assert is_bootstrap is True
+
+    def test_push_writes_updated_state(self):
+        from state_manager import push_seen_ids
+        mock_resp = Mock()
+        mock_resp.raise_for_status.return_value = None
+
+        with patch("state_manager.requests.patch", return_value=mock_resp) as mock_patch:
+            push_seen_ids(self.GIST_ID, self.TOKEN, {"id1", "id2"})
+
+        mock_patch.assert_called_once()
+        _, kwargs = mock_patch.call_args
+        content = kwargs["json"]["files"]["seen_ids.json"]["content"]
+        stored = json.loads(content)
+        assert set(stored) == {"id1", "id2"}
+
+    def test_push_sends_auth_header(self):
+        from state_manager import push_seen_ids
+        mock_resp = Mock()
+        mock_resp.raise_for_status.return_value = None
+
+        with patch("state_manager.requests.patch", return_value=mock_resp) as mock_patch:
+            push_seen_ids(self.GIST_ID, self.TOKEN, {"x"})
+
+        _, kwargs = mock_patch.call_args
+        assert f"Bearer {self.TOKEN}" in kwargs["headers"]["Authorization"]
+
+    def test_push_logs_on_failure_without_crash(self):
+        from state_manager import push_seen_ids
+        with patch("state_manager.requests.patch", side_effect=ConnectionError("down")):
+            # Must not raise
+            push_seen_ids(self.GIST_ID, self.TOKEN, {"id1"})
+
 
 # ---------------------------------------------------------------------------
 # allowlist_manager tests
@@ -282,7 +354,6 @@ class TestAllowlistManager:
 
     def test_is_allowed_case_insensitive(self):
         import allowlist_manager
-        # Seed with a known entry
         allowlist_manager._save_unsafe(["google"])
         assert allowlist_manager.is_allowed("Google") is True
         assert allowlist_manager.is_allowed("GOOGLE") is True
@@ -293,34 +364,8 @@ class TestAllowlistManager:
         allowlist_manager._save_unsafe(["google"])
         assert allowlist_manager.is_allowed("Unknown Corp") is False
 
-    def test_add_company_returns_true_for_new(self):
+    def test_seeds_defaults_on_first_run(self):
         import allowlist_manager
-        allowlist_manager._save_unsafe([])
-        result = allowlist_manager.add_company("Stripe")
-        assert result is True
-
-    def test_add_company_returns_false_for_duplicate(self):
-        import allowlist_manager
-        allowlist_manager._save_unsafe(["stripe"])
-        result = allowlist_manager.add_company("Stripe")
-        assert result is False
-
-    def test_add_company_persists(self):
-        import allowlist_manager
-        allowlist_manager._save_unsafe([])
-        allowlist_manager.add_company("Figma")
-        assert allowlist_manager.is_allowed("figma") is True
-
-    def test_add_company_case_insensitive_dedup(self):
-        import allowlist_manager
-        allowlist_manager._save_unsafe(["figma"])
-        # Adding with different casing should be treated as duplicate
-        result = allowlist_manager.add_company("FIGMA")
-        assert result is False
-
-    def test_seeds_defaults_on_first_run(self, tmp_path):
-        import allowlist_manager
-        # File doesn't exist yet — load() should seed it
         entries = allowlist_manager.load()
         assert "google" in entries
         assert "anthropic" in entries
@@ -332,9 +377,17 @@ class TestAllowlistManager:
         entries = allowlist_manager.load()
         assert "google" in entries
 
+    def test_original_casing_lowercased_on_load(self):
+        import allowlist_manager
+        allowlist_manager._save_unsafe(["Google", "Meta"])
+        entries = allowlist_manager.load()
+        assert "google" in entries
+        assert "meta" in entries
+        assert "Google" not in entries
+
 
 # ---------------------------------------------------------------------------
-# mainbot integration tests (Slack client mocked)
+# mainbot integration tests (Slack client + Gist mocked)
 # ---------------------------------------------------------------------------
 
 class TestCheckCycle:
@@ -344,8 +397,9 @@ class TestCheckCycle:
         monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-test")
         monkeypatch.setenv("SLACK_CHANNEL_ID", "C123456")
         monkeypatch.setenv("GITHUB_REPO_URL", "https://github.com/test/repo")
+        monkeypatch.setenv("GIST_ID", "fake-gist-id")
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp-fake")
         monkeypatch.chdir(tmp_path)
-        # Seed an allowlist that includes the test company so existing cycle tests pass
         monkeypatch.setattr(allowlist_manager, "ALLOWLIST_FILE", tmp_path / "allowlist.json")
         allowlist_manager._save_unsafe(["acme corp"])
 
@@ -355,14 +409,17 @@ class TestCheckCycle:
         return client
 
     def test_new_listing_triggers_slack_post(self, tmp_path):
-        import mainbot, state_manager
+        import mainbot
         client = self._make_client_mock()
 
         with (
             patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
             patch("mainbot.load_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
         ):
-            mainbot.check_cycle(client)
+            mainbot.check_cycle(
+                client, seen_ids=set(), repo_url="https://github.com/test/repo",
+                channel="C123456",
+            )
 
         client.chat_postMessage.assert_called_once()
         call_kwargs = client.chat_postMessage.call_args.kwargs
@@ -370,16 +427,17 @@ class TestCheckCycle:
         assert "blocks" in call_kwargs
 
     def test_seen_listing_not_reposted(self, tmp_path):
-        import mainbot, state_manager
-        # Pre-populate seen state
-        state_manager.save_seen_ids({"abc123"})
+        import mainbot
         client = self._make_client_mock()
 
         with (
             patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
             patch("mainbot.load_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
         ):
-            mainbot.check_cycle(client)
+            mainbot.check_cycle(
+                client, seen_ids={"abc123"}, repo_url="https://github.com/test/repo",
+                channel="C123456",
+            )
 
         client.chat_postMessage.assert_not_called()
 
@@ -387,12 +445,11 @@ class TestCheckCycle:
         import mainbot
         client = self._make_client_mock()
 
-        with patch(
-            "mainbot.repo_manager.ensure_repo",
-            side_effect=RuntimeError("git pull failed"),
-        ):
-            # Should log the error and return cleanly
-            mainbot.check_cycle(client)
+        with patch("mainbot.repo_manager.ensure_repo", side_effect=RuntimeError("git pull failed")):
+            mainbot.check_cycle(
+                client, seen_ids=set(), repo_url="https://github.com/test/repo",
+                channel="C123456",
+            )
 
         client.chat_postMessage.assert_not_called()
 
@@ -408,26 +465,30 @@ class TestCheckCycle:
             patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
             patch("mainbot.load_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
         ):
-            mainbot.check_cycle(client)
-
+            mainbot.check_cycle(
+                client, seen_ids=set(), repo_url="https://github.com/test/repo",
+                channel="C123456",
+            )
         # Error was logged; no exception propagated
 
-    def test_seen_ids_persisted_after_cycle(self, tmp_path):
-        import mainbot, state_manager
+    def test_seen_ids_returned_after_cycle(self, tmp_path):
+        import mainbot
         client = self._make_client_mock()
 
         with (
             patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
             patch("mainbot.load_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
         ):
-            mainbot.check_cycle(client)
+            updated = mainbot.check_cycle(
+                client, seen_ids=set(), repo_url="https://github.com/test/repo",
+                channel="C123456",
+            )
 
-        seen = state_manager.load_seen_ids()
-        assert "abc123" in seen
+        assert "abc123" in updated
 
     def test_non_allowlisted_company_not_posted(self, tmp_path):
         import allowlist_manager, mainbot
-        allowlist_manager._save_unsafe(["google"])  # only Google allowed
+        allowlist_manager._save_unsafe(["google"])
         client = self._make_client_mock()
         unlisted_listing = {**SAMPLE_LISTING_ACTIVE, "id": "xyz", "company_name": "Acme Corp"}
 
@@ -435,7 +496,10 @@ class TestCheckCycle:
             patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
             patch("mainbot.load_listings", return_value=[unlisted_listing]),
         ):
-            mainbot.check_cycle(client)
+            mainbot.check_cycle(
+                client, seen_ids=set(), repo_url="https://github.com/test/repo",
+                channel="C123456",
+            )
 
         client.chat_postMessage.assert_not_called()
 
@@ -449,6 +513,57 @@ class TestCheckCycle:
             patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
             patch("mainbot.load_listings", return_value=[google_listing]),
         ):
-            mainbot.check_cycle(client)
+            mainbot.check_cycle(
+                client, seen_ids=set(), repo_url="https://github.com/test/repo",
+                channel="C123456",
+            )
 
         client.chat_postMessage.assert_called_once()
+
+    def test_bootstrap_mode_skips_posting(self, tmp_path):
+        import mainbot
+        client = self._make_client_mock()
+
+        with (
+            patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
+            patch("mainbot.load_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
+        ):
+            updated = mainbot.check_cycle(
+                client, seen_ids=set(), repo_url="https://github.com/test/repo",
+                channel="C123456", post_enabled=False,
+            )
+
+        client.chat_postMessage.assert_not_called()
+        # ID still recorded so it won't fire on the next (non-bootstrap) run
+        assert "abc123" in updated
+
+    def test_gist_fetch_and_push_called_in_main(self, tmp_path):
+        import mainbot
+        client_mock = self._make_client_mock()
+
+        with (
+            patch("mainbot.WebClient", return_value=client_mock),
+            patch("mainbot.state_manager.fetch_seen_ids", return_value=(set(), False)) as mock_fetch,
+            patch("mainbot.state_manager.push_seen_ids") as mock_push,
+            patch("mainbot.check_cycle", return_value={"some-id"}) as mock_cycle,
+        ):
+            mainbot.main()
+
+        mock_fetch.assert_called_once_with("fake-gist-id", "ghp-fake")
+        mock_push.assert_called_once_with("fake-gist-id", "ghp-fake", {"some-id"})
+        mock_cycle.assert_called_once()
+
+    def test_bootstrap_flag_propagated_from_gist_failure(self, tmp_path):
+        import mainbot
+        client_mock = self._make_client_mock()
+
+        with (
+            patch("mainbot.WebClient", return_value=client_mock),
+            patch("mainbot.state_manager.fetch_seen_ids", return_value=(set(), True)),
+            patch("mainbot.state_manager.push_seen_ids"),
+            patch("mainbot.check_cycle", return_value=set()) as mock_cycle,
+        ):
+            mainbot.main()
+
+        _, kwargs = mock_cycle.call_args
+        assert kwargs.get("post_enabled") is False
