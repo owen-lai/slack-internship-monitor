@@ -7,7 +7,6 @@ ephemeral runners via a private GitHub Gist.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 from pathlib import Path
@@ -18,8 +17,15 @@ from slack_sdk.errors import SlackApiError
 
 import allowlist_manager
 import formatter
+import markdown_parser
 import repo_manager
 import state_manager
+
+# Raw URL for the SimplifyJobs off-season README (dev branch).
+_SIMPLIFY_OFFSEASON_URL = (
+    "https://raw.githubusercontent.com/SimplifyJobs/"
+    "Summer2026-Internships/dev/README-Off-Season.md"
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,20 +37,27 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 
-def load_listings(repo_path: Path) -> list[dict]:
-    """Read and parse the listings JSON file from the cloned repo."""
-    listings_path = repo_manager.find_listings_file(repo_path)
-    text = listings_path.read_text(encoding="utf-8")
-    data = json.loads(text)
-    if isinstance(data, dict):
-        for key in ("postings", "listings", "jobs", "data"):
-            if key in data and isinstance(data[key], list):
-                logger.debug("Unwrapping top-level key '%s'", key)
-                return data[key]
-        raise ValueError(f"Unexpected JSON structure: top-level keys are {list(data.keys())}")
-    if isinstance(data, list):
-        return data
-    raise ValueError(f"Unexpected JSON type: {type(data)}")
+def load_all_listings(repo_path: Path) -> list[dict]:
+    """
+    Load listings from all sources and merge them into one list.
+
+    Sources (in order):
+      1. vanshb03 README.md        — summer 2026 listings
+      2. vanshb03 OFFSEASON_README.md — fall/spring 2026 listings
+      3. SimplifyJobs README-Off-Season.md (fetched via HTTP)
+    """
+    listings: list[dict] = []
+    for filename, tag in [("README.md", "vanshb03-summer"), ("OFFSEASON_README.md", "vanshb03-offseason")]:
+        p = repo_path / filename
+        if p.exists():
+            listings.extend(markdown_parser.parse_markdown_file(p, tag))
+        else:
+            logger.warning("Expected file not found in cloned repo: %s", filename)
+
+    listings.extend(markdown_parser.fetch_and_parse(_SIMPLIFY_OFFSEASON_URL, "simplify-offseason"))
+
+    logger.info("Total listings across all sources: %d", len(listings))
+    return listings
 
 
 def post_listing(client: WebClient, channel: str, listing: dict) -> None:
@@ -90,10 +103,9 @@ def check_cycle(
         logger.error("Git operation failed: %s", exc)
         return seen_ids
 
-    try:
-        listings = load_listings(repo_path)
-    except (json.JSONDecodeError, ValueError, FileNotFoundError, OSError) as exc:
-        logger.error("Failed to load listings: %s", exc)
+    listings = load_all_listings(repo_path)
+    if not listings:
+        logger.error("No listings loaded from any source — skipping cycle.")
         return seen_ids
 
     logger.info("Loaded %d total listings", len(listings))

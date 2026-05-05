@@ -60,8 +60,19 @@ def format_message(listing: dict) -> dict:
     )
     date_posted = _format_date(listing.get("date_posted") or listing.get("posted"))
     url = listing.get("url") or listing.get("application_url") or ""
+    terms = listing.get("terms", "")
 
     fallback_text = f"New internship: {title} at {company} — {locations}"
+
+    fields: list[dict] = [
+        {"type": "mrkdwn", "text": f"*Company*\n{company}"},
+        {"type": "mrkdwn", "text": f"*Role*\n{title}"},
+        {"type": "mrkdwn", "text": f"*Location(s)*\n{locations}"},
+        {"type": "mrkdwn", "text": f"*Sponsorship*\n{sponsorship}"},
+        {"type": "mrkdwn", "text": f"*Date Posted*\n{date_posted}"},
+    ]
+    if terms:
+        fields.append({"type": "mrkdwn", "text": f"*Term(s)*\n{terms}"})
 
     blocks: list[dict] = [
         {
@@ -72,31 +83,7 @@ def format_message(listing: dict) -> dict:
                 "emoji": True,
             },
         },
-        {
-            "type": "section",
-            "fields": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Company*\n{company}",
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Role*\n{title}",
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Location(s)*\n{locations}",
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Sponsorship*\n{sponsorship}",
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Date Posted*\n{date_posted}",
-                },
-            ],
-        },
+        {"type": "section", "fields": fields},
     ]
 
     if url:

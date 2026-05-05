@@ -414,7 +414,7 @@ class TestCheckCycle:
 
         with (
             patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
-            patch("mainbot.load_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
+            patch("mainbot.load_all_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
         ):
             mainbot.check_cycle(
                 client, seen_ids=set(), repo_url="https://github.com/test/repo",
@@ -432,7 +432,7 @@ class TestCheckCycle:
 
         with (
             patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
-            patch("mainbot.load_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
+            patch("mainbot.load_all_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
         ):
             mainbot.check_cycle(
                 client, seen_ids={"abc123"}, repo_url="https://github.com/test/repo",
@@ -463,7 +463,7 @@ class TestCheckCycle:
 
         with (
             patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
-            patch("mainbot.load_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
+            patch("mainbot.load_all_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
         ):
             mainbot.check_cycle(
                 client, seen_ids=set(), repo_url="https://github.com/test/repo",
@@ -477,7 +477,7 @@ class TestCheckCycle:
 
         with (
             patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
-            patch("mainbot.load_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
+            patch("mainbot.load_all_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
         ):
             updated = mainbot.check_cycle(
                 client, seen_ids=set(), repo_url="https://github.com/test/repo",
@@ -494,7 +494,7 @@ class TestCheckCycle:
 
         with (
             patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
-            patch("mainbot.load_listings", return_value=[unlisted_listing]),
+            patch("mainbot.load_all_listings", return_value=[unlisted_listing]),
         ):
             mainbot.check_cycle(
                 client, seen_ids=set(), repo_url="https://github.com/test/repo",
@@ -511,7 +511,7 @@ class TestCheckCycle:
 
         with (
             patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
-            patch("mainbot.load_listings", return_value=[google_listing]),
+            patch("mainbot.load_all_listings", return_value=[google_listing]),
         ):
             mainbot.check_cycle(
                 client, seen_ids=set(), repo_url="https://github.com/test/repo",
@@ -526,7 +526,7 @@ class TestCheckCycle:
 
         with (
             patch("mainbot.repo_manager.ensure_repo", return_value=tmp_path),
-            patch("mainbot.load_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
+            patch("mainbot.load_all_listings", return_value=[SAMPLE_LISTING_ACTIVE]),
         ):
             updated = mainbot.check_cycle(
                 client, seen_ids=set(), repo_url="https://github.com/test/repo",
