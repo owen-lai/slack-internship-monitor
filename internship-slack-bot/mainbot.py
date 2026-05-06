@@ -126,6 +126,7 @@ def check_cycle(
         if l["id"] not in prev_ids
         and l.get("active", True)
         and l.get("is_visible", True)
+        and l.get("date_posted") == "0d"
     ]
 
     logger.info("%d new listings to post.", len(new_listings))
