@@ -21,12 +21,6 @@ import markdown_parser
 import repo_manager
 import state_manager
 
-# Raw URL for the SimplifyJobs off-season README (dev branch).
-_SIMPLIFY_OFFSEASON_URL = (
-    "https://raw.githubusercontent.com/SimplifyJobs/"
-    "Summer2026-Internships/dev/README-Off-Season.md"
-)
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -39,30 +33,30 @@ load_dotenv()
 
 def load_all_listings(repo_path: Path) -> list[dict]:
     """
-    Load listings from all sources and merge them into one list.
+    Load listings from the cloned SimplifyJobs repo.
 
-    Sources (in order):
-      1. vanshb03 README.md        — summer 2026 listings
-      2. vanshb03 OFFSEASON_README.md — fall/spring 2026 listings
-      3. SimplifyJobs README-Off-Season.md (fetched via HTTP)
+    Sources:
+      1. README.md          — summer 2026 listings
+      2. README-Off-Season.md — fall/spring 2026 listings
     """
     listings: list[dict] = []
-    for filename, tag in [("README.md", "vanshb03-summer"), ("OFFSEASON_README.md", "vanshb03-offseason")]:
+    for filename, tag in [
+        ("README.md", "simplify-summer"),
+        ("README-Off-Season.md", "simplify-offseason"),
+    ]:
         p = repo_path / filename
         if p.exists():
             listings.extend(markdown_parser.parse_markdown_file(p, tag))
         else:
             logger.warning("Expected file not found in cloned repo: %s", filename)
 
-    listings.extend(markdown_parser.fetch_and_parse(_SIMPLIFY_OFFSEASON_URL, "simplify-offseason"))
-
     logger.info("Total listings across all sources: %d", len(listings))
     return listings
 
 
-def post_listing(client: WebClient, channel: str, listing: dict) -> None:
+def post_listing(client: WebClient, channel: str, listing: dict, ping: bool = False) -> None:
     """Send a single listing to Slack. Logs and swallows API errors."""
-    payload = formatter.format_message(listing)
+    payload = formatter.format_message(listing, ping=ping)
     try:
         client.chat_postMessage(
             channel=channel,
@@ -70,7 +64,8 @@ def post_listing(client: WebClient, channel: str, listing: dict) -> None:
             blocks=payload["blocks"],
         )
         logger.info(
-            "Posted: %s @ %s",
+            "Posted%s: %s @ %s",
+            " [PING]" if ping else "",
             listing.get("title", "?"),
             listing.get("company_name") or listing.get("company", "?"),
         )
@@ -98,7 +93,7 @@ def check_cycle(
     Returns the updated seen_ids set.
     """
     try:
-        repo_path = repo_manager.ensure_repo(repo_url)
+        repo_path = repo_manager.ensure_repo(repo_url, branch="dev")
     except RuntimeError as exc:
         logger.error("Git operation failed: %s", exc)
         return seen_ids
@@ -122,10 +117,8 @@ def check_cycle(
         if not post_enabled:
             continue
         company = listing.get("company_name") or listing.get("company") or ""
-        if not allowlist_manager.is_allowed(company):
-            logger.debug("Skipping non-allowlisted company: %s", company)
-            continue
-        post_listing(client, channel, listing)
+        ping = allowlist_manager.is_allowed(company)
+        post_listing(client, channel, listing, ping=ping)
 
     return seen_ids
 
@@ -134,7 +127,7 @@ def main() -> None:
     slack_token: str = os.environ["SLACK_BOT_TOKEN"]
     channel: str = os.environ["SLACK_CHANNEL_ID"]
     repo_url: str = os.getenv(
-        "GITHUB_REPO_URL", "https://github.com/vanshb03/Summer2026-Internships"
+        "GITHUB_REPO_URL", "https://github.com/SimplifyJobs/Summer2026-Internships"
     )
     gist_id: str = os.environ["GIST_ID"]
     github_token: str = os.environ["GHUB_TOKEN"]

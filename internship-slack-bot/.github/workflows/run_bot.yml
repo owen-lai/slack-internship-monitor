@@ -30,7 +30,7 @@ jobs:
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
-          GITHUB_REPO_URL: https://github.com/vanshb03/Summer2026-Internships
+          GITHUB_REPO_URL: https://github.com/SimplifyJobs/Summer2026-Internships
           # GHUB_TOKEN is a PAT with `gist` scope stored as a repo secret.
           GHUB_TOKEN: ${{ secrets.GHUB_TOKEN }}
           GIST_ID: ${{ secrets.GIST_ID }}

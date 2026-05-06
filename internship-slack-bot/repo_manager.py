@@ -4,21 +4,12 @@ repo_manager.py — Clone or pull the internship listings GitHub repo.
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 CLONED_REPO_DIR = "internships_repo"
-
-# Known locations of the listings JSON inside the target repo.
-# We try each path in order and use the first one that exists.
-_CANDIDATE_PATHS = [
-    ".listings.json",
-    "listings.json",
-    "jobs.json",
-]
 
 
 def _run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
@@ -31,7 +22,7 @@ def _run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
     )
 
 
-def ensure_repo(repo_url: str) -> Path:
+def ensure_repo(repo_url: str, branch: str | None = None) -> Path:
     """Clone the repo if absent, otherwise pull latest. Returns the repo root Path."""
     repo_path = Path(CLONED_REPO_DIR)
 
@@ -46,7 +37,11 @@ def ensure_repo(repo_url: str) -> Path:
         logger.debug("git pull output: %s", result.stdout.strip())
     else:
         logger.info("Cloning %s → %s", repo_url, repo_path)
-        result = _run(["git", "clone", repo_url, str(repo_path)])
+        cmd = ["git", "clone"]
+        if branch:
+            cmd += ["--branch", branch, "--single-branch"]
+        cmd += [repo_url, str(repo_path)]
+        result = _run(cmd)
         if result.returncode != 0:
             raise RuntimeError(
                 f"git clone failed (exit {result.returncode}):\n"
@@ -54,23 +49,3 @@ def ensure_repo(repo_url: str) -> Path:
             )
 
     return repo_path
-
-
-def find_listings_file(repo_path: Path) -> Path:
-    """Return the Path to the listings JSON file inside the cloned repo."""
-    for candidate in _CANDIDATE_PATHS:
-        p = repo_path / candidate
-        if p.exists():
-            logger.debug("Found listings file: %s", p)
-            return p
-
-    # Fallback: search recursively for any *.json that looks like a listings file
-    for p in sorted(repo_path.rglob("*.json")):
-        if p.name.startswith(".") or "listing" in p.name.lower() or "job" in p.name.lower():
-            logger.warning("Guessed listings file: %s", p)
-            return p
-
-    raise FileNotFoundError(
-        f"Could not locate a listings JSON file in {repo_path}. "
-        f"Tried: {_CANDIDATE_PATHS}"
-    )

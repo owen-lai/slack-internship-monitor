@@ -486,7 +486,7 @@ class TestCheckCycle:
 
         assert "abc123" in updated
 
-    def test_non_allowlisted_company_not_posted(self, tmp_path):
+    def test_non_allowlisted_company_is_posted_without_ping(self, tmp_path):
         import allowlist_manager, mainbot
         allowlist_manager._save_unsafe(["google"])
         client = self._make_client_mock()
@@ -501,9 +501,11 @@ class TestCheckCycle:
                 channel="C123456",
             )
 
-        client.chat_postMessage.assert_not_called()
+        client.chat_postMessage.assert_called_once()
+        text = client.chat_postMessage.call_args.kwargs["text"]
+        assert "<!here>" not in text
 
-    def test_allowlisted_company_is_posted(self, tmp_path):
+    def test_allowlisted_company_is_posted_with_ping(self, tmp_path):
         import allowlist_manager, mainbot
         allowlist_manager._save_unsafe(["google"])
         client = self._make_client_mock()
@@ -519,6 +521,8 @@ class TestCheckCycle:
             )
 
         client.chat_postMessage.assert_called_once()
+        text = client.chat_postMessage.call_args.kwargs["text"]
+        assert "<!here>" in text
 
     def test_bootstrap_mode_skips_posting(self, tmp_path):
         import mainbot

@@ -46,7 +46,7 @@ def _locations_text(locations: list | str | None) -> str:
     return ", ".join(str(loc) for loc in locations if loc)
 
 
-def format_message(listing: dict) -> dict:
+def format_message(listing: dict, ping: bool = False) -> dict:
     """
     Build a Slack API `chat.postMessage` payload (blocks + text) for a single listing.
 
@@ -62,7 +62,8 @@ def format_message(listing: dict) -> dict:
     url = listing.get("url") or listing.get("application_url") or ""
     terms = listing.get("terms", "")
 
-    fallback_text = f"New internship: {title} at {company} — {locations}"
+    ping_prefix = "<!here> " if ping else ""
+    fallback_text = f"{ping_prefix}New internship: {title} at {company} — {locations}"
 
     fields: list[dict] = [
         {"type": "mrkdwn", "text": f"*Company*\n{company}"},
@@ -83,8 +84,13 @@ def format_message(listing: dict) -> dict:
                 "emoji": True,
             },
         },
-        {"type": "section", "fields": fields},
     ]
+    if ping:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": "<!here> *Watchlist company — new opening!*"},
+        })
+    blocks.append({"type": "section", "fields": fields})
 
     if url:
         blocks.append(
