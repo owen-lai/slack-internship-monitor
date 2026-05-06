@@ -93,7 +93,7 @@ def check_cycle(
     Returns the updated seen_ids set.
     """
     try:
-        repo_path = repo_manager.ensure_repo(repo_url, branch="main")
+        repo_path = repo_manager.ensure_repo(repo_url, branch="dev")
     except RuntimeError as exc:
         logger.error("Git operation failed: %s", exc)
         return seen_ids
@@ -109,12 +109,14 @@ def check_cycle(
     logger.info(
         "%d new active listings found%s",
         len(new_listings),
-        " (bootstrap: not posting)" if not post_enabled else "",
+        " (bootstrap: suppressing old listings)" if not post_enabled else "",
     )
 
     for listing in new_listings:
         seen_ids.add(str(listing["id"]))
-        if not post_enabled:
+        age = listing.get("date_posted", "")
+        is_recent = age in ("0d", "1d")
+        if not post_enabled and not is_recent:
             continue
         company = listing.get("company_name") or listing.get("company") or ""
         ping = allowlist_manager.is_allowed(company)
