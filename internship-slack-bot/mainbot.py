@@ -93,7 +93,7 @@ def check_cycle(
     Returns the updated seen_ids set.
     """
     try:
-        repo_path = repo_manager.ensure_repo(repo_url, branch="dev")
+        repo_path = repo_manager.ensure_repo(repo_url, branch="main")
     except RuntimeError as exc:
         logger.error("Git operation failed: %s", exc)
         return seen_ids

@@ -156,9 +156,16 @@ def _parse_html_rows(content: str, source_tag: str) -> list[dict]:
         company_raw = cells[0].strip()
         role_raw = cells[1].strip()
         location_raw = cells[2].strip()
-        terms = _clean_cell(cells[3]) if len(cells) > 3 else ""
-        app_raw = cells[4].strip() if len(cells) > 4 else ""
-        age_raw = cells[5].strip() if len(cells) > 5 else ""
+        # 5-col format: Company|Role|Location|Application|Age (no Terms)
+        # 6-col format: Company|Role|Location|Terms|Application|Age
+        if len(cells) >= 6:
+            terms = _clean_cell(cells[3])
+            app_raw = cells[4].strip()
+            age_raw = cells[5].strip()
+        else:
+            terms = ""
+            app_raw = cells[3].strip()
+            age_raw = cells[4].strip() if len(cells) > 4 else ""
 
         # Company cell: <strong><a ...>Name</a></strong>  OR  ↳
         company_link = re.search(
