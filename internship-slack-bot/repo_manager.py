@@ -18,7 +18,7 @@ def _run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess:
         cwd=cwd,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=120,
     )
 
 
@@ -40,7 +40,7 @@ def ensure_repo(repo_url: str, branch: str | None = None) -> Path:
         cmd = ["git", "clone"]
         if branch:
             cmd += ["--branch", branch, "--single-branch"]
-        cmd += [repo_url, str(repo_path)]
+        cmd += ["--depth", "1", repo_url, str(repo_path)]
         result = _run(cmd)
         if result.returncode != 0:
             raise RuntimeError(
@@ -49,3 +49,13 @@ def ensure_repo(repo_url: str, branch: str | None = None) -> Path:
             )
 
     return repo_path
+
+
+def get_head_sha(repo_path: Path) -> str:
+    """Return the current HEAD commit SHA of the cloned repo."""
+    result = _run(["git", "rev-parse", "HEAD"], cwd=str(repo_path))
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"git rev-parse HEAD failed (exit {result.returncode}):\n{result.stderr}"
+        )
+    return result.stdout.strip()

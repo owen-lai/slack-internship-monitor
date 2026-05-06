@@ -2,13 +2,14 @@
 mainbot.py — Entrypoint for the internship Slack bot.
 
 Always performs a single check cycle and exits. Designed to be called
-by GitHub Actions on a cron schedule. Seen state is persisted between
-ephemeral runners via a private GitHub Gist.
+by GitHub Actions on a cron schedule. The last-processed commit SHA is
+persisted between ephemeral runners via a private GitHub Gist.
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -30,27 +31,38 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+_SOURCES = [
+    ("README.md", "simplify-summer"),
+    ("README-Off-Season.md", "simplify-offseason"),
+]
+
+
+def _raw_url(repo_url: str, sha: str, filename: str) -> str | None:
+    m = re.match(r"https://github\.com/([^/]+/[^/]+?)(?:\.git)?$", repo_url)
+    if not m:
+        return None
+    return f"https://raw.githubusercontent.com/{m.group(1)}/{sha}/{filename}"
+
 
 def load_all_listings(repo_path: Path) -> list[dict]:
-    """
-    Load listings from the cloned SimplifyJobs repo.
-
-    Sources:
-      1. README.md          — summer 2026 listings
-      2. README-Off-Season.md — fall/spring 2026 listings
-    """
     listings: list[dict] = []
-    for filename, tag in [
-        ("README.md", "simplify-summer"),
-        ("README-Off-Season.md", "simplify-offseason"),
-    ]:
+    for filename, tag in _SOURCES:
         p = repo_path / filename
         if p.exists():
             listings.extend(markdown_parser.parse_markdown_file(p, tag))
         else:
             logger.warning("Expected file not found in cloned repo: %s", filename)
+    logger.info("Total listings from local clone: %d", len(listings))
+    return listings
 
-    logger.info("Total listings across all sources: %d", len(listings))
+
+def load_listings_at_sha(repo_url: str, sha: str) -> list[dict]:
+    listings: list[dict] = []
+    for filename, tag in _SOURCES:
+        url = _raw_url(repo_url, sha, filename)
+        if url:
+            listings.extend(markdown_parser.fetch_and_parse(url, tag))
+    logger.info("Total listings at commit %s: %d", sha[:8], len(listings))
     return listings
 
 
@@ -79,50 +91,50 @@ def post_listing(client: WebClient, channel: str, listing: dict, ping: bool = Fa
 
 def check_cycle(
     client: WebClient,
-    seen_ids: set[str],
+    last_sha: str | None,
     repo_url: str,
     channel: str,
-    post_enabled: bool = True,
-) -> set[str]:
+) -> str | None:
     """
-    Fetch the latest listings, diff against seen_ids, and post new ones.
+    Clone/pull the repo, compare HEAD against last_sha, and post new listings.
 
-    post_enabled=False skips Slack messages (bootstrap mode: record state
-    without flooding the channel on first run or after a Gist failure).
-
-    Returns the updated seen_ids set.
+    Returns the new HEAD SHA to persist, or None if the git operation failed.
     """
     try:
         repo_path = repo_manager.ensure_repo(repo_url, branch="dev")
+        head_sha = repo_manager.get_head_sha(repo_path)
     except RuntimeError as exc:
         logger.error("Git operation failed: %s", exc)
-        return seen_ids
+        return None
 
-    listings = load_all_listings(repo_path)
-    if not listings:
-        logger.error("No listings loaded from any source — skipping cycle.")
-        return seen_ids
+    if last_sha is None:
+        logger.info("Bootstrap: recording HEAD %s without posting.", head_sha[:8])
+        return head_sha
 
-    logger.info("Loaded %d total listings", len(listings))
+    if head_sha == last_sha:
+        logger.info("No new commits since %s — nothing to post.", last_sha[:8])
+        return last_sha
 
-    new_listings = state_manager.diff_listings(listings, seen_ids)
-    logger.info(
-        "%d new active listings found%s",
-        len(new_listings),
-        " (bootstrap: suppressing old listings)" if not post_enabled else "",
-    )
+    logger.info("New commits detected: %s → %s", last_sha[:8], head_sha[:8])
 
+    current_listings = load_all_listings(repo_path)
+    prev_listings = load_listings_at_sha(repo_url, last_sha)
+
+    prev_ids = {l["id"] for l in prev_listings}
+    new_listings = [
+        l for l in current_listings
+        if l["id"] not in prev_ids
+        and l.get("active", True)
+        and l.get("is_visible", True)
+    ]
+
+    logger.info("%d new listings to post.", len(new_listings))
     for listing in new_listings:
-        seen_ids.add(str(listing["id"]))
-        age = listing.get("date_posted", "")
-        is_recent = age in ("0d", "1d")
-        if not post_enabled and not is_recent:
-            continue
         company = listing.get("company_name") or listing.get("company") or ""
         ping = allowlist_manager.is_allowed(company)
         post_listing(client, channel, listing, ping=ping)
 
-    return seen_ids
+    return head_sha
 
 
 def main() -> None:
@@ -136,19 +148,14 @@ def main() -> None:
 
     client = WebClient(token=slack_token)
 
-    seen_ids, is_bootstrap = state_manager.fetch_seen_ids(gist_id, github_token)
+    last_sha, is_bootstrap = state_manager.fetch_last_commit(gist_id, github_token)
     if is_bootstrap:
-        logger.info("Bootstrap mode — recording current state without posting.")
+        logger.info("Bootstrap mode — no prior commit recorded.")
 
-    updated_ids = check_cycle(
-        client,
-        seen_ids,
-        repo_url=repo_url,
-        channel=channel,
-        post_enabled=not is_bootstrap,
-    )
+    new_sha = check_cycle(client, last_sha, repo_url=repo_url, channel=channel)
 
-    state_manager.push_seen_ids(gist_id, github_token, updated_ids)
+    if new_sha:
+        state_manager.push_last_commit(gist_id, github_token, new_sha)
 
 
 if __name__ == "__main__":
