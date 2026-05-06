@@ -1,0 +1,40 @@
+name: Internship Monitor
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Every 5 minutes — GH Actions minimum granularity
+    - cron: "*/5 * * * *"
+  workflow_dispatch: # allow manual runs from the Actions UI
+
+jobs:
+  check-internships:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4   # fail fast if something hangs
+
+    steps:
+      - name: Checkout bot repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: internship-slack-bot/requirements.txt
+
+      - name: Install dependencies
+        working-directory: internship-slack-bot
+        run: pip install -r requirements.txt
+
+      - name: Run check cycle
+        working-directory: internship-slack-bot
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          GITHUB_REPO_URL: https://github.com/SimplifyJobs/Summer2026-Internships
+          # GHUB_TOKEN is a PAT with `gist` scope stored as a repo secret.
+          GHUB_TOKEN: ${{ secrets.GHUB_TOKEN }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+        run: python mainbot.py
